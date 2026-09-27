@@ -19,6 +19,7 @@ bot.py
 التخزين: ملف watches.json بسيط (عشان لو انعمل ريستارت للسيرفس ما تضيع المراقبات).
 """
 
+import asyncio
 import json
 import os
 import random
@@ -277,6 +278,14 @@ async def my_watches(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
+    # حل بديل: بايثون 3.14 ألغى الإنشاء التلقائي للـ event loop، وهاد بيسبب
+    # كراش داخل مكتبة python-telegram-bot. منعمله يدويًا هون قبل ما نبلش.
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
