@@ -24,6 +24,8 @@ import json
 import os
 import random
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -277,7 +279,27 @@ async def my_watches(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n\n".join(lines))
 
 
+def start_healthcheck_server():
+    """سيرفر HTTP بسيط بس عشان Render يشوف فيه بورت مفتوح. ما إله علاقة بالبوت نفسه."""
+    port = int(os.environ.get("PORT", "10000"))
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+        def log_message(self, *args):
+            pass  # نتجاهل طباعة كل طلب عشان ما يزحم الـ logs
+
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+
 def main():
+    start_healthcheck_server()
+
     # حل بديل: بايثون 3.14 ألغى الإنشاء التلقائي للـ event loop، وهاد بيسبب
     # كراش داخل مكتبة python-telegram-bot. منعمله يدويًا هون قبل ما نبلش.
     try:
