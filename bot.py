@@ -24,6 +24,7 @@ import json
 import os
 import random
 import logging
+import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -297,8 +298,28 @@ def start_healthcheck_server():
     thread.start()
 
 
+def ensure_browser_installed():
+    """
+    بدل ما نعتمد على تثبيت المتصفح وقت البناء (Build) وممكن يروح لمسار
+    مختلف عن وقت التشغيل الفعلي، منثبته هون مباشرة أول ما يقلع البوت،
+    بنفس البيئة تمامًا يلي رح يشتغل فيها. أبطأ شوي أول مرة بس أضمن.
+    """
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
+    try:
+        subprocess.run(
+            ["playwright", "install", "chromium"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        log.info("Playwright chromium ready.")
+    except subprocess.CalledProcessError as e:
+        log.error("فشل تثبيت المتصفح: %s", e.stderr)
+
+
 def main():
     start_healthcheck_server()
+    ensure_browser_installed()
 
     # حل بديل: بايثون 3.14 ألغى الإنشاء التلقائي للـ event loop، وهاد بيسبب
     # كراش داخل مكتبة python-telegram-bot. منعمله يدويًا هون قبل ما نبلش.
