@@ -42,24 +42,26 @@ async def _get_select_options(page, index):
 
 async def _select_and_wait(page, index, label):
     """
-    يختار قيمة بقائمة select، وينتظر إعادة التحميل الكاملة للصفحة (ASP.NET
-    postback) قبل ما يكمل. لو ما صارت أي navigation (نادرًا، لو كانت
-    AJAX جزئية فعلاً)، منكتفي بـ networkidle.
+    يختار قيمة بقائمة select. الموقع أحيانًا بيعمل navigation كاملة
+    وأحيانًا تحديث جزئي (AJAX) بس فيه نشاط شبكة خلفي مستمر بيمنع
+    networkidle من الوصول أبدًا، فبدل ما نستنى "استقرار الشبكة" (غير
+    موثوق هون)، منستنى فترة ثابتة بسيطة تكفي للتحديث.
     """
     select = page.locator("select").nth(index)
     try:
-        async with page.expect_navigation(wait_until="networkidle", timeout=15000):
+        async with page.expect_navigation(wait_until="load", timeout=5000):
             await select.select_option(label=label)
+        await page.wait_for_timeout(1500)
     except Exception:
-        # ما صارت navigation كاملة (مثلاً كان تحديث جزئي) - نكتفي بهاد
-        await page.wait_for_load_state("networkidle")
+        # ما صارت navigation كاملة خلال 5 ثواني - غالبًا تحديث AJAX جزئي
+        await page.wait_for_timeout(3000)
 
 
 async def get_semesters():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle")
+        await page.goto(URL, wait_until="load")
         options = await _get_select_options(page, SELECT_SEMESTER)
         await browser.close()
         return options
@@ -69,7 +71,7 @@ async def get_colleges():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle")
+        await page.goto(URL, wait_until="load")
         options = await _get_select_options(page, SELECT_COLLEGE)
         await browser.close()
         return options
@@ -80,7 +82,7 @@ async def get_departments(semester: str, college: str):
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle")
+        await page.goto(URL, wait_until="load")
 
         await _select_and_wait(page, SELECT_SEMESTER, semester)
         await _select_and_wait(page, SELECT_COLLEGE, college)
@@ -98,7 +100,7 @@ async def get_course_table(semester: str, college: str, department: str, status:
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle")
+        await page.goto(URL, wait_until="load")
 
         await _select_and_wait(page, SELECT_SEMESTER, semester)
         await _select_and_wait(page, SELECT_COLLEGE, college)
@@ -137,7 +139,7 @@ async def debug_dump():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
         page = await browser.new_page()
-        await page.goto(URL, wait_until="networkidle")
+        await page.goto(URL, wait_until="load")
         selects = page.locator("select")
         count = await selects.count()
         print(f"عدد عناصر select: {count}")
