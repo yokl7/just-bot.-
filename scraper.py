@@ -40,6 +40,21 @@ async def _get_select_options(page, index):
     return [o.strip() for o in options if o.strip() and "اختر" not in o]
 
 
+async def _select_and_wait(page, index, label):
+    """
+    يختار قيمة بقائمة select، وينتظر إعادة التحميل الكاملة للصفحة (ASP.NET
+    postback) قبل ما يكمل. لو ما صارت أي navigation (نادرًا، لو كانت
+    AJAX جزئية فعلاً)، منكتفي بـ networkidle.
+    """
+    select = page.locator("select").nth(index)
+    try:
+        async with page.expect_navigation(wait_until="networkidle", timeout=15000):
+            await select.select_option(label=label)
+    except Exception:
+        # ما صارت navigation كاملة (مثلاً كان تحديث جزئي) - نكتفي بهاد
+        await page.wait_for_load_state("networkidle")
+
+
 async def get_semesters():
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -67,13 +82,8 @@ async def get_departments(semester: str, college: str):
         page = await browser.new_page()
         await page.goto(URL, wait_until="networkidle")
 
-        sem_select = page.locator("select").nth(SELECT_SEMESTER)
-        await sem_select.select_option(label=semester)
-        await page.wait_for_load_state("networkidle")
-
-        col_select = page.locator("select").nth(SELECT_COLLEGE)
-        await col_select.select_option(label=college)
-        await page.wait_for_load_state("networkidle")
+        await _select_and_wait(page, SELECT_SEMESTER, semester)
+        await _select_and_wait(page, SELECT_COLLEGE, college)
 
         options = await _get_select_options(page, SELECT_DEPARTMENT)
         await browser.close()
@@ -90,17 +100,10 @@ async def get_course_table(semester: str, college: str, department: str, status:
         page = await browser.new_page()
         await page.goto(URL, wait_until="networkidle")
 
-        await page.locator("select").nth(SELECT_SEMESTER).select_option(label=semester)
-        await page.wait_for_load_state("networkidle")
-
-        await page.locator("select").nth(SELECT_COLLEGE).select_option(label=college)
-        await page.wait_for_load_state("networkidle")
-
-        await page.locator("select").nth(SELECT_DEPARTMENT).select_option(label=department)
-        await page.wait_for_load_state("networkidle")
-
-        await page.locator("select").nth(SELECT_STATUS).select_option(label=status)
-        await page.wait_for_load_state("networkidle")
+        await _select_and_wait(page, SELECT_SEMESTER, semester)
+        await _select_and_wait(page, SELECT_COLLEGE, college)
+        await _select_and_wait(page, SELECT_DEPARTMENT, department)
+        await _select_and_wait(page, SELECT_STATUS, status)
 
         # نختار أكبر جدول بالصفحة (غالبًا هو جدول النتائج)
         tables = page.locator("table")
