@@ -92,10 +92,29 @@ async def get_departments(semester: str, college: str):
         return options
 
 
+async def _extract_table(page):
+    all_tables = await page.evaluate(
+        """
+        () => Array.from(document.querySelectorAll('table')).map(table =>
+            Array.from(table.querySelectorAll('tr')).map(tr =>
+                Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim())
+            )
+        )
+        """
+    )
+    best_table = max(all_tables, key=len, default=[])
+    results = []
+    for row in best_table[1:]:  # نتخطى صف العناوين
+        if not row or all(cell == "" for cell in row):
+            continue
+        results.append({"raw": row})
+    return results
+
+
 async def get_course_table(semester: str, college: str, department: str, status: str = "الجميع"):
     """
-    يرجع لستة من dict لكل صف بالجدول:
-    {"course_code": ..., "course_name": ..., "section": ..., "status": ..., "raw": [كل الأعمدة]}
+    نسخة "دفعة وحدة" (تفتح متصفح، تختار كل شي، تجيب الجدول، تسكر) -
+    مستخدمة بالمراقبة الدورية بالخلفية يلي بتصير مرة كل فترة لحالها.
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch()
@@ -107,31 +126,48 @@ async def get_course_table(semester: str, college: str, department: str, status:
         await _select_and_wait(page, SELECT_DEPARTMENT, department)
         await _select_and_wait(page, SELECT_STATUS, status)
 
-        # نختار أكبر جدول بالصفحة (غالبًا هو جدول النتائج)
-        tables = page.locator("table")
-        count = await tables.count()
-        best_rows = []
-        for i in range(count):
-            rows = tables.nth(i).locator("tr")
-            rc = await rows.count()
-            if rc > len(best_rows):
-                best_table_index = i
-                best_rows_count = rc
-
-        rows = tables.nth(best_table_index).locator("tr")
-        rc = await rows.count()
-
-        results = []
-        for i in range(1, rc):  # نتخطى صف العناوين
-            cells = rows.nth(i).locator("td")
-            cc = await cells.count()
-            if cc == 0:
-                continue
-            texts = [(await cells.nth(j).inner_text()).strip() for j in range(cc)]
-            results.append({"raw": texts})
-
+        results = await _extract_table(page)
         await browser.close()
         return results
+
+
+# ---------------------------------------------------------------------------
+# دوال "جلسة": بيتفتح متصفح واحد بس ويضل مفتوح طول رحلة الاختيار التفاعلية
+# (فصل -> كلية -> قسم -> جدول)، بدل ما نفتح متصفح جديد بكل خطوة. أسرع بكتير.
+# ---------------------------------------------------------------------------
+async def open_session():
+    p = await async_playwright().start()
+    browser = await p.chromium.launch()
+    page = await browser.new_page()
+    await page.goto(URL, wait_until="load")
+    return p, browser, page
+
+
+async def close_session(p, browser):
+    try:
+        await browser.close()
+    finally:
+        await p.stop()
+
+
+async def session_get_semesters(page):
+    return await _get_select_options(page, SELECT_SEMESTER)
+
+
+async def session_get_colleges(page, semester: str):
+    await _select_and_wait(page, SELECT_SEMESTER, semester)
+    return await _get_select_options(page, SELECT_COLLEGE)
+
+
+async def session_get_departments(page, college: str):
+    await _select_and_wait(page, SELECT_COLLEGE, college)
+    return await _get_select_options(page, SELECT_DEPARTMENT)
+
+
+async def session_get_table(page, department: str, status: str = "الجميع"):
+    await _select_and_wait(page, SELECT_DEPARTMENT, department)
+    await _select_and_wait(page, SELECT_STATUS, status)
+    return await _extract_table(page)
 
 
 async def debug_dump():
