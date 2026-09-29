@@ -88,38 +88,47 @@ def save_last_filters(chat_id: int, semester: str, college: str, department: str
 # ---------------------------------------------------------------------------
 # /start -> اختيار الفصل الدراسي
 # ---------------------------------------------------------------------------
+async def _close_open_session(session: dict):
+    """يسكر أي متصفح جلسة سابقة ما انسكر (مثلاً المستخدم عمل /start مرتين)."""
+    if session.get("_playwright"):
+        try:
+            await scraper.close_session(session["_playwright"], session["_browser"])
+        except Exception:
+            pass
+        session.pop("_playwright", None)
+        session.pop("_browser", None)
+        session.pop("_page", None)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    await update.message.reply_text("بجيب قائمة الفصول الدراسية، لحظة...")
-    semesters = await scraper.get_semesters()
-    user_sessions[chat_id] = {"semesters": semesters}
-    buttons = [
-        [InlineKeyboardButton(s, callback_data=f"sem::{i}")]
-        for i, s in enumerate(semesters)
-    ]
-    await update.message.reply_text(
-        "اختار الفصل الدراسي:", reply_markup=InlineKeyboardMarkup(buttons)
-    )
+    await _close_open_session(user_sessions.get(chat_id, {}))
 
+    await update.message.reply_text("بفتح صفحة الجدول، لحظة...")
+    p, browser, page = await scraper.open_session()
+    semesters = await scraper.session_get_semesters(page)
 
-async def on_semester_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    chat_id = query.message.chat_id
-    session = user_sessions.setdefault(chat_id, {})
-    idx = int(query.data.split("::", 1)[1])
-    semester = session["semesters"][idx]
-    session["semester"] = semester
+    # منختار أول فصل دراسي بالقائمة تلقائيًا (غالبًا هو الفصل الحالي/الأقرب)
+    # بدون ما نسأل المستخدم، ونروح على طول لاختيار الكلية.
+    semester = semesters[0]
 
-    await query.edit_message_text(f"الفصل: {semester}\nبجيب قائمة الكليات...")
-    colleges = await scraper.get_colleges()
-    session["colleges"] = colleges
+    user_sessions[chat_id] = {
+        "_playwright": p,
+        "_browser": browser,
+        "_page": page,
+        "semesters": semesters,
+        "semester": semester,
+    }
+
+    await update.message.reply_text(f"الفصل: {semester}\nبجيب قائمة الكليات...")
+    colleges = await scraper.session_get_colleges(page, semester)
+    user_sessions[chat_id]["colleges"] = colleges
     buttons = [
         [InlineKeyboardButton(c, callback_data=f"col::{i}")]
         for i, c in enumerate(colleges)
     ]
-    await context.bot.send_message(
-        chat_id, "اختار الكلية:", reply_markup=InlineKeyboardMarkup(buttons)
+    await update.message.reply_text(
+        "اختار الكلية:", reply_markup=InlineKeyboardMarkup(buttons)
     )
 
 
@@ -133,7 +142,7 @@ async def on_college_chosen(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session["college"] = college
 
     await query.edit_message_text(f"الكلية: {college}\nبجيب قائمة الأقسام...")
-    departments = await scraper.get_departments(session["semester"], college)
+    departments = await scraper.session_get_departments(session["_page"], college)
     session["departments"] = departments
     buttons = [
         [InlineKeyboardButton(d, callback_data=f"dep::{i}")]
@@ -155,11 +164,12 @@ async def on_department_chosen(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await query.edit_message_text(f"القسم: {department}\nبجيب جدول الشعب...")
 
-    rows = await scraper.get_course_table(
-        session["semester"], session["college"], department, status="الجميع"
-    )
+    rows = await scraper.session_get_table(session["_page"], department, status="الجميع")
     session["table"] = rows
     save_last_filters(chat_id, session["semester"], session["college"], department)
+
+    # خلصنا من المتصفح التفاعلي - نسكره (المراقبة بعدين بتفتح متصفح لحالها كل فحص)
+    await _close_open_session(session)
 
     if not rows:
         await context.bot.send_message(chat_id, "ما لقيت أي شعب لهاد القسم حاليًا.")
@@ -221,10 +231,19 @@ async def on_row_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
         idx = int(text) - 1
     else:
         # مش رقم سطر صالح -> جرب نطابقه كرمز مادة (أول عمود بالجدول)
-        for i, r in enumerate(rows):
-            if r["raw"] and r["raw"][0].strip() == text:
-                idx = i
-                break
+        # ممكن يكون فيه أكتر من شعبة لنفس الرمز، فمنجمعهم كلهم
+        matches = [
+            i for i, r in enumerate(rows) if r["raw"] and r["raw"][0].strip() == text
+        ]
+        if len(matches) == 1:
+            idx = matches[0]
+        elif len(matches) > 1:
+            lines = [f"{i + 1}. {' | '.join(rows[i]['raw'])}" for i in matches]
+            await update.message.reply_text(
+                "هاي المادة إلها أكتر من شعبة، ابعتلي رقم السطر بالظبط يلي بدك تراقبه:\n\n"
+                + "\n".join(lines)
+            )
+            return
 
     if idx is None:
         await update.message.reply_text(
@@ -320,6 +339,7 @@ async def check_one_watch(context: ContextTypes.DEFAULT_TYPE):
 
 async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    await _close_open_session(user_sessions.get(chat_id, {}))
     watches = load_watches()
     if str(chat_id) in watches:
         del watches[str(chat_id)]
@@ -394,7 +414,6 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stop", stop))
     app.add_handler(CommandHandler("mywatches", my_watches))
-    app.add_handler(CallbackQueryHandler(on_semester_chosen, pattern=r"^sem::"))
     app.add_handler(CallbackQueryHandler(on_college_chosen, pattern=r"^col::"))
     app.add_handler(CallbackQueryHandler(on_department_chosen, pattern=r"^dep::"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_row_number))
